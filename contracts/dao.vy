@@ -1,5 +1,15 @@
 # @version ^0.2.0
 
+event ProposalCreated:
+    id: uint256
+    name: String[50]
+    addr: indexed(address)
+
+event MemberVote:
+    id: uint256
+    amount: uint256
+    member: indexed(address)
+
 admin: address
 endTime: uint256
 
@@ -122,11 +132,12 @@ def transferShare(amount: uint256, receiver: address) -> bool:
 # Members can create a proposal
 @external
 @payable
-def createProposal(_name: String[50], _amount: uint256, _addr: address) -> Proposal:
+def createProposal(_name: String[50], _amount: uint256, _addr: address) -> uint256:
     assert self.daoMembers[msg.sender] == True, "Only members can create proposals"
     assert msg.value > 1, "You must spend 1 ether in order to create a proposal"
+    current_proposal_id: uint256 = self.proposalCount
     new_proposal: Proposal = Proposal({
-        id: self.proposalCount,
+        id: current_proposal_id,
         name: _name,
         amount: _amount,
         addr: _addr,
@@ -135,9 +146,10 @@ def createProposal(_name: String[50], _amount: uint256, _addr: address) -> Propo
         end: block.timestamp + 604800,
         executed: False
     })
-    self.idToProposal[self.proposalCount] = new_proposal
+    self.idToProposal[current_proposal_id] = new_proposal
     self.proposalCount += 1
-    return new_proposal
+    log ProposalCreated(current_proposal_id, _name, _addr)
+    return current_proposal_id
 
 # Proposal voting / weighted voting
 @external
@@ -145,7 +157,9 @@ def proposalVoting(_id: uint256):
     assert self.votes[msg.sender][_id] == False
     self.votes[msg.sender][_id] = True
     # Member vote is proportional to how much they have invested
-    self.idToProposal[_id].votes += self.investmentLock[msg.sender]
+    totalVotes: uint256 = self.idToProposal[_id].votes + self.investmentLock[msg.sender]
+    self.idToProposal[_id].votes = totalVotes
+    log MemberVote(_id, totalVotes, msg.sender)
 
 @external
 @view
@@ -155,8 +169,10 @@ def viewApprovedProposals(_id: uint256) -> Proposal:
 @external
 def checkVotes(_id: uint256) -> bool:
     assert msg.sender == self.admin, "Only the admin may check proposal voting"
+    assert block.timestamp > self.idToProposal[_id].end, "The proposal time hasn't elapsed yet"
     # empty() is used to make Proposal type that is uninstantiated
     assert self.approvedProposals[_id] == empty(Proposal), "This proposal has already been approved"
+    # if statement check if atleast half of the votes in the entire DAO are for the current proposal
     if self.idToProposal[_id].votes * 2 >= self.totalDaoTokens:
         self.approvedProposals[_id] = self.idToProposal[_id]
         return True
