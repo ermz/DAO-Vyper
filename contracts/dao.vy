@@ -24,6 +24,12 @@ tokenApprovalLedger: HashMap[address, HashMap[address, uint256]]
 proposalCount: uint256
 idToProposal: HashMap[uint256, Proposal]
 votes: HashMap[address, HashMap[uint256, bool]]
+approvedProposals: HashMap[uint256, Proposal]
+
+@external
+@view
+def contractBalance() -> uint256:
+    return self.balance
 
 @external
 @view
@@ -31,10 +37,25 @@ def viewInvestment() -> uint256:
     return self.investmentLock[msg.sender]
 
 @external
+@view
+def isMember() -> bool:
+    return self.daoMembers[msg.sender]
+
+@external
+@view
+def viewTotalTokens() -> uint256:
+    return self.totalDaoTokens
+
+@external
+@view
+def viewApprovals(addr: address) -> uint256:
+    return self.tokenApprovalLedger[addr][msg.sender]
+
+@external
 def addMember(member: address) -> bool:
     assert msg.sender == self.admin, "Only the admin may add new members"
     assert self.daoMembers[msg.sender] == False, "You are already a member, don't get greedy"
-    self.daoMembers[msg.sender] = True
+    self.daoMembers[member] = True
     return True
 
 # The contract needs to mint a certain amount everytime an investore deposits
@@ -48,7 +69,8 @@ def daoMint(depositor: address, amount: uint256) -> address:
 def depositFund(amount: uint256) -> bool:
     assert self.daoMembers[msg.sender] == True, "You must be a member"
     assert msg.value >= amount, "Insufficient funds"
-    assert block.timestamp > self.endTime, "It's too late to deposit funds"
+    # block.timestamp which is now, needs to be less than self.endTime
+    assert block.timestamp < self.endTime, "It's too late to deposit funds"
     assert self.investmentLock[msg.sender] == 0, "You can't deposit multiple times"
 
     self.investmentLock[msg.sender] = amount
@@ -61,7 +83,7 @@ def depositFund(amount: uint256) -> bool:
 def redeemFunds(amount: uint256) -> bool:
     assert self.balance > amount, "There isn't enough ether in the smart contract"
     assert amount <= self.investmentLock[msg.sender], "You're trying to redeem more than you have"
-    assert self.endTime > block.timestamp, "You're time has run out, you can still sell to other members"
+    assert block.timestamp < self.endTime, "You're time has run out, you can still sell to other members"
     self.investmentLock[msg.sender] -= amount
     self.totalDaoTokens -= amount
     # eventually implement an adjusment that will more accurately return ether in relation to current market price
@@ -120,4 +142,45 @@ def createProposal(_name: String[50], _amount: uint256, _addr: address) -> Propo
 # Proposal voting / weighted voting
 @external
 def proposalVoting(_id: uint256):
-    self.idToProposal[_id].votes += 1
+    assert self.votes[msg.sender][_id] == False
+    self.votes[msg.sender][_id] = True
+    # Member vote is proportional to how much they have invested
+    self.idToProposal[_id].votes += self.investmentLock[msg.sender]
+
+@external
+@view
+def viewApprovedProposals(_id: uint256) -> Proposal:
+    return self.approvedProposals[_id]
+
+@external
+def checkVotes(_id: uint256) -> bool:
+    assert msg.sender == self.admin, "Only the admin may check proposal voting"
+    # empty() is used to make Proposal type that is uninstantiated
+    assert self.approvedProposals[_id] == empty(Proposal), "This proposal has already been approved"
+    if self.idToProposal[_id].votes * 2 >= self.totalDaoTokens:
+        self.approvedProposals[_id] = self.idToProposal[_id]
+        return True
+
+    return False
+
+@external
+def executeProposal(_id: uint256) -> bool:
+    assert msg.sender == self.admin, "Only the admin can execute a proposal"
+    assert self.idToProposal[_id].executed == False
+    assert self.approvedProposals[_id] != empty(Proposal)
+    assert self.balance > self.totalDaoTokens
+    send(self.idToProposal[_id].addr, self.totalDaoTokens)
+    return True
+
+# For the receiver of funds to return profits once they are made
+@external
+@payable
+def returnProfit(_id: uint256) -> Proposal:
+    send(self, msg.value)
+    return self.idToProposal[_id]
+    
+
+
+
+
+
